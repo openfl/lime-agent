@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<project>
+
+	<meta title="Lime Agent Sample" package="org.limeagent.sample" version="1.0.0" company="lime-agent" />
+	<app main="Main" path="Export" file="LimeAgentSample" />
+	<window width="640" height="400" resizable="false" />
+
+	<source path="Source" />
+
+	<haxelib name="lime" />
+
+	<!-- An installed app would use <haxelib name="lime-agent" />; the sample uses this checkout directly. -->
+	<haxedef name="lime-agent" />
+	<source path="../../src" />
+	<include path="../../include.xml" />
+
+</project>

@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<extension>
+	<haxeflag name="--macro" value="limeagent.macro.Setup.init()" />
+</extension>

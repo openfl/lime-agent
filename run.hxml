@@ -1,0 +1,3 @@
+-cp src
+-main limeagent.cli.Run
+-neko run.n

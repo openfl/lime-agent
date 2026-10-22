@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<project>
+
+	<meta title="Lime Agent Feathers Sample" package="org.limeagent.feathers" version="1.0.0" company="lime-agent" />
+	<app main="Main" path="Export" file="LimeAgentFeathers" />
+	<window width="480" height="360" resizable="false" />
+
+	<source path="Source" />
+
+	<haxelib name="openfl" />
+	<haxelib name="feathersui" />
+
+	<!-- An installed app would use <haxelib name="lime-agent" />; the sample uses this checkout directly. -->
+	<haxedef name="lime-agent" />
+	<source path="../../src" />
+	<include path="../../include.xml" />
+
+</project>
