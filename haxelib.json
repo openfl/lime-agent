@@ -15,7 +15,7 @@
 	"classPath": "src",
 	"releasenote": "First development release: screenshot, UI tree, logs, errors, input and an MCP server.",
 	"contributors": [
-		"dimensionscape"
+		"Dimensionscape"
 	],
 	"dependencies": {
 		"lime": ""
