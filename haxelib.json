@@ -1,12 +1,22 @@
 {
 	"name": "lime-agent",
-	"license": "MIT",
-	"tags": ["lime", "openfl", "debug", "testing", "mcp", "agent"],
+	"url": "https://github.com/openfl/lime-agent",
+	"license": "MPL-2.0",
+	"tags": [
+		"lime",
+		"openfl",
+		"debug",
+		"testing",
+		"mcp",
+		"agent"
+	],
 	"description": "Lets coding agents see, debug and drive a running Lime app through a loopback endpoint and an MCP server.",
 	"version": "0.1.0",
 	"classPath": "src",
 	"releasenote": "First development release: screenshot, UI tree, logs, errors, input and an MCP server.",
-	"contributors": [],
+	"contributors": [
+		"dimensionscape"
+	],
 	"dependencies": {
 		"lime": ""
 	}

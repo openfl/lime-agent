@@ -172,3 +172,7 @@ They launch the samples, check every endpoint (including the security refusals),
 ## Protocol
 
 The endpoint protocol, registry format and the plan for hot reload are in [docs/design.md](docs/design.md).
+
+## License
+
+[Mozilla Public License 2.0](LICENSE).
