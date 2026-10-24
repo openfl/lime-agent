@@ -10,7 +10,9 @@
 	<haxelib name="openfl" />
 	<haxelib name="feathersui" />
 
-	<!-- An installed app would use <haxelib name="lime-agent" />; the sample uses this checkout directly. -->
+	<!-- An installed app would use <haxelib name="lime-agent" />, which brings crossbyte and libhxcpp with it; the sample uses this checkout directly. -->
+	<haxelib name="crossbyte" version="1.0.0" />
+	<haxelib name="libhxcpp" />
 	<haxedef name="lime-agent" />
 	<source path="../../src" />
 	<include path="../../include.xml" />

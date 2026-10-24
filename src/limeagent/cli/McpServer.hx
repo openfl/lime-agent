@@ -9,7 +9,7 @@ import limeagent.cli.AppClient;
 	It reads the registry and talks only to the loopback ports listed there.
 **/
 class McpServer {
-	public static inline var VERSION = "0.1.0";
+	public static inline var VERSION = "0.2.0";
 	static var PROTOCOLS = ["2025-06-18", "2025-03-26", "2024-11-05"];
 
 	static var INSTRUCTIONS = "Inspect and drive running Lime/OpenFL apps that were launched with LIME_AGENT=1. "

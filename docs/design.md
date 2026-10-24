@@ -2,12 +2,12 @@
 
 lime-agent lets a coding agent look at, read and drive a running Lime app while you develop it. It has two halves:
 
-- **The library**, compiled into a development build of the app. It serves a small loopback HTTP endpoint from the app's own frame loop.
+- **The library**, compiled into a development build of the app. It serves a loopback endpoint, HTTP and a WebSocket, from the app's own frame loop, using crossbyte.
 - **The MCP server** (`haxelib run lime-agent mcp`), started by Claude Code, Codex or Cursor. It finds running apps through a per-user registry and turns the endpoint into MCP tools.
 
-Phase 1 changes nothing about how apps are built: add the haxelib, launch with `LIME_AGENT=1`. Phase 2 (a CPPIA hot-reload runtime that may ship with Lime) plugs into the same registry, protocol and tools.
+Phase 1 changes nothing in an app's code: add the haxelib, launch with `LIME_AGENT=1`. Native builds use libhxcpp, which crossbyte needs (section 7). Phase 2 (a CPPIA hot-reload runtime that may ship with Lime) plugs into the same registry, protocol and tools.
 
-Phase 1 targets native desktop builds through hxcpp (Windows, macOS, Linux). HTML5 has no listening sockets. HashLink and Neko would need a secure random source and `chmod`, and are left for later.
+Phase 1 targets native desktop builds through libhxcpp (Windows, macOS, Linux). HTML5 has no listening sockets. HashLink and Neko would need a secure random source and `chmod`, and are left for later.
 
 ## 1. Opting in
 
@@ -17,7 +17,7 @@ Phase 1 targets native desktop builds through hxcpp (Windows, macOS, Linux). HTM
 | `LIME_AGENT=1` in the launch environment | Starts the endpoint. Without it the agent does nothing: no socket, no hooks, no registry entry. `-D lime-agent-autostart` does the same at compile time. |
 | `LIME_AGENT_INPUT=1` (or `-D lime-agent-input`) | Additionally allows input. Without it the app can be watched, not driven. |
 
-Optional: `LIME_AGENT_PORT` (1024 to 65535) and `LIME_AGENT_TOKEN` (24 characters or more) for scripts that want a fixed port and token. Otherwise the app binds a free port and makes a 32-byte random token (BCryptGenRandom on Windows, `/dev/urandom` elsewhere).
+Optional: `LIME_AGENT_PORT` and `LIME_AGENT_WS_PORT` (1024 to 65535) and `LIME_AGENT_TOKEN` (24 characters or more) for scripts that want fixed ports and a fixed token. Otherwise the app binds two free ports and makes a 32-byte random token from crossbyte's `SecureRandom`, the system's secure random source.
 
 The init macro adds `@:build` hooks to `lime.app.Application` (attach on construction, record a fatal error around `exec`) and `lime.utils.Log` (copy warnings and errors), and defines `HXCPP_STACK_TRACE` and `HXCPP_STACK_LINE` so release builds keep stacks (`-D lime-agent-no-stack` opts out). No app code changes are needed for the default behaviour.
 
@@ -34,7 +34,7 @@ Host: 127.0.0.1:<port>    (or localhost:<port>)
 { ...arguments... }
 ```
 
-Refused with 403 before anything else: a wrong or missing token, any `Origin` header, a `Host` that is not loopback with this port (DNS rebinding), a non-JSON content type (form CSRF). Methods other than POST get 405, bodies over 64 KB get 413, chunked bodies 411. At most 4 connections; a request must arrive within 5 seconds.
+Refused with 403 before anything else: a wrong or missing token, any `Origin` header, a `Host` that is not loopback with this port (DNS rebinding), a non-JSON content type (form CSRF). Methods other than POST get 405, bodies over 64 KB get 413 (chunked bodies are read, within the same limit). At most 4 connections; a request must arrive within 5 seconds.
 
 Success is HTTP 200 with a JSON object. Failure is a non-200 status with `{"error": {"code": "...", "message": "..."}}`. Codes: `unauthorized` 403, `input_disabled` 403, `unknown_op` 404, `bad_request` 400, `too_large` 413, `sensitive` 423, `unsupported` 501 (no tree adapter), `unavailable` 503 (no window, or no frame within 3 seconds), `internal` 500.
 
@@ -57,6 +57,14 @@ Input events are dispatched one per frame through the window's own Lime events (
 
 `screenshot` is taken from the app's own framebuffer at the end of its render (a lowest-priority `window.onRender` listener calling `window.readPixels` with the window's framebuffer bound), never from the desktop. Other windows and overlays are never included. Frameworks that skip unchanged frames (OpenFL) are asked to render one. An adapter that can capture directly (Graphaxe renders its stage to a texture) answers at once instead. If the captured image differs from the view size it is scaled to it, so screenshot, tree and input always share one grid.
 
+### WebSocket
+
+The same ops over one connection, on a second port: `ws://127.0.0.1:<wsPort>/lime-agent/v1`, with `wsPort` in the registry entry. The upgrade request gets the HTTP checks: the bearer token in `Authorization`, a loopback `Host` with this port, and no `Origin` (every browser sends one, so pages cannot connect). A failed check answers the upgrade 403; another path, 404. At most 4 sessions; the upgrade must finish within 5 seconds; messages up to 64 KB.
+
+Calls are text messages, `{"id": <any JSON value>, "op": "<op>", "args": {...}}`. Each is answered once, `{"id", "status", "result"}` on success or `{"id", "status", "error": {code, message}}` otherwise, with the status and code the same call gets over HTTP. A call that waits (`screenshot`, `input`, `wait_idle`) is answered when it finishes, so answers can come in another order than the calls: match them by `id`. A message that is not a JSON object with a string `op` is answered with `id` null and 400.
+
+One op exists only here. `subscribe` with `{events: ["log", "error"]}` (either or both; a later `subscribe` replaces the list) answers `{events}`, then sends `{"event": "log", "entry": {seq, time, level, message, source}}` for each log line and `{"event": "error", "entry": {seq, time, message, stack, fatal}}` for each error, as the app records them, the error that ends the app included. Entries have the same `seq` as `logs` and `errors`, so a client that reconnects can page back with those ops.
+
 **Versioning.** The version is in the path. A later v2 adds `/lime-agent/v2/...` and the app can keep serving v1. `info.protocol.min` says the oldest version the app still answers. New ops inside v1 are announced through `capabilities` and never change an existing op's meaning, so agents keep working.
 
 **Capabilities** in v1: `info`, `screenshot`, `tree`, `logs`, `errors`, `wait_idle`, `input` (only when input is enabled), `command:<name>` per app command. Reserved for phase 2: `reload`, `state`.
@@ -72,7 +80,7 @@ A per-user directory with one file per running app:
 | Linux | `$XDG_RUNTIME_DIR/lime-agent/apps`, else `~/.local/state/lime-agent/apps` |
 | Any (tests) | `LIME_AGENT_REGISTRY` |
 
-`<pid>.json`: `{protocol, pid, name, title, port, token, started, capabilities, lime, frameworks, exe}` (`started` in epoch milliseconds). Written atomically after the port is listening; deleted when the app exits. The MCP server prunes an entry whose port refuses connections or whose app rejects its token.
+`<pid>.json`: `{protocol, pid, name, title, port, wsPort, token, started, capabilities, lime, frameworks, exe}` (`started` in epoch milliseconds; `wsPort` from 0.2.0). Written atomically after the port is listening; deleted when the app exits. The MCP server prunes an entry whose port refuses connections or whose app rejects its token.
 
 On macOS and Linux the directory is set to 0700 and the file to 0600, and the app reads the modes back. If they are still group or world accessible the token is not written; the endpoint still runs, reachable only by someone who has the token from the environment. Windows relies on the profile directory's ACL (the user, SYSTEM and Administrators).
 
@@ -127,10 +135,10 @@ Phase 2 generalizes Phasor's `ClientHost`: a native host that loads the app as a
 
 ## 7. Decisions for Chris
 
-1. **No dependency.** The endpoint is a ~200-line loopback HTTP server on `sys.net.Socket`, pumped from `Application.onUpdate`, instead of crossbyte's `HTTPServer` (which Phasor uses). Lime could not ship a crossbyte dependency.
+1. **crossbyte for the endpoint (changed in 0.2.0).** 0.1.0 had no dependency: its endpoint was a ~250-line loopback HTTP server on `sys.net.Socket`, since Lime could not ship a crossbyte dependency and crossbyte's native builds need libhxcpp. From 0.2.0 lime-agent depends on crossbyte 1.0.0 and libhxcpp, and serves HTTP with crossbyte's `HTTPServer` and the WebSocket with its `ServerWebSocket`. The reasons: stock hxcpp is outdated, crossbyte needs libhxcpp, and crossbyte brings the WebSocket and its pushed events without a second hand-written server. The runtime is a crossbyte `HostApplication` advanced from `Application.onUpdate`; an app that already runs crossbyte keeps its own, and the endpoint runs on it. The MCP server (`run.n`, on Neko) keeps a blocking client on `sys.net.Socket`: crossbyte's WebSocket client needs a secure random source that Neko lacks, and one request per tool call needs no event loop.
 2. **Compiled in unless `-final`.** Adding the haxelib compiles the agent into debug and release builds; `-final` strips it. It still does nothing without `LIME_AGENT=1`. The stricter alternative is debug builds only.
 3. **MCP server as `run.n`**, like Lime's own tools, so `haxelib run lime-agent mcp` works wherever Haxe is installed, with no separate download.
 
 ## 8. Status
 
-Built and tested on Windows 10 with hxcpp, Lime 8.4.0, OpenFL 9.5.2 and Feathers UI 1.3.0: `samples/basic` (plain Lime) and `samples/feathers` (OpenFL and Feathers UI) pass `haxe tests.hxml`. The Graphaxe adapter type-checks against Graphaxe's source but has not run against a Graphaxe app. The macOS and Linux paths (registry location, `chmod` and its check, `/dev/urandom`) have not been built yet.
+Built and tested on Windows 10 with libhxcpp 6.0.0, crossbyte 1.0.0, Lime 8.4.0, OpenFL 9.5.2 and Feathers UI 1.3.0: `samples/basic` (plain Lime) and `samples/feathers` (OpenFL and Feathers UI) pass `haxe tests.hxml` over HTTP, the WebSocket and the MCP server. The Graphaxe adapter type-checks against Graphaxe's source but has not run against a Graphaxe app. The macOS and Linux paths (registry location, `chmod` and its check, `/dev/urandom`) have not been built yet.

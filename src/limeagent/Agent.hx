@@ -11,7 +11,8 @@ import lime.graphics.RenderContext;
 import lime.ui.MouseWheelMode;
 import lime.ui.Window;
 import limeagent.Adapter;
-import limeagent.http.LoopbackServer;
+import limeagent.net.Endpoint;
+import limeagent.net.Request;
 
 typedef LogEntry = {seq:Int, time:Float, level:String, message:String, ?source:String};
 typedef ErrorEntry = {seq:Int, time:Float, message:String, stack:Array<String>, fatal:Bool};
@@ -29,7 +30,7 @@ private class AgentError {
 }
 
 /**
-	The in-app side of lime-agent: a loopback endpoint pumped from `Application.onUpdate`.
+	The in-app side of lime-agent: a loopback endpoint (HTTP and WebSocket) pumped from `Application.onUpdate`.
 	Attached by the init macro when the first Application is constructed; does nothing unless `LIME_AGENT=1`.
 **/
 @:access(limeagent.LimeAgent)
@@ -44,7 +45,7 @@ class Agent {
 
 	static var app:Application;
 	static var window:Window;
-	static var server:LoopbackServer;
+	static var server:Endpoint;
 	static var token:String;
 	static var id:String;
 	static var input = false;
@@ -88,33 +89,41 @@ class Agent {
 	static function start(target:Window):Void {
 		window = target;
 		input = #if lime_agent_input true #else Sys.getEnv("LIME_AGENT_INPUT") == "1" #end;
-		var envToken = Sys.getEnv("LIME_AGENT_TOKEN"), envPort = Sys.getEnv("LIME_AGENT_PORT");
+		var envToken = Sys.getEnv("LIME_AGENT_TOKEN");
 		if (envToken == "") envToken = null;
 		if (envToken != null && envToken.length < 24) throw "LIME_AGENT_TOKEN must be at least 24 characters.";
-		var port = 0;
-		if (envPort != null && envPort != "") {
-			var parsed = Std.parseInt(envPort);
-			if (parsed == null || parsed < 1024 || parsed > 65535) throw "LIME_AGENT_PORT must be between 1024 and 65535.";
-			port = parsed;
-		}
-		token = envToken != null ? envToken : Native.secureRandom(32).toHex();
-		server = new LoopbackServer(port);
+		token = envToken != null ? envToken : randomHex(32);
+		server = new Endpoint(envPort("LIME_AGENT_PORT"), envPort("LIME_AGENT_WS_PORT"), token, PREFIX, handle);
 		adapters = LimeAgent.adapters.concat(builtInAdapters());
 		for (adapter in adapters) try adapter.install() catch (error:Dynamic) log("warn", 'lime-agent: ${adapter.name} hooks failed: $error');
 		window.onRender.add(render, false, -1000000);
 		var pid = Native.pid();
-		id = pid > 0 ? Std.string(pid) : Native.secureRandom(8).toHex();
+		id = pid > 0 ? Std.string(pid) : randomHex(8);
 		registryPath = try Registry.publish(id, {
-			protocol: PROTOCOL, pid: pid, name: appName(), title: window.title, port: server.port, token: token,
+			protocol: PROTOCOL, pid: pid, name: appName(), title: window.title, port: server.port, wsPort: server.webSocketPort, token: token,
 			started: Date.now().getTime(), capabilities: capabilities(), lime: limeVersion(), frameworks: frameworks(), exe: Sys.programPath()
 		}) catch (error:Dynamic) {
 			log("warn", 'lime-agent: registry not written: $error');
 			null;
 		};
-		var line = 'lime-agent listening on 127.0.0.1:${server.port}, input ${input ? "on" : "off"}'
+		var line = 'lime-agent listening on 127.0.0.1:${server.port} (WebSocket ${server.webSocketPort}), input ${input ? "on" : "off"}'
 			+ (registryPath == null ? "; not registered because the registry directory is not private" : "");
 		log("info", line);
 		Sys.println("[" + line + "]");
+	}
+
+	/** A fixed port from the environment, or 0 for a free one. */
+	static function envPort(name:String):Int {
+		var text = Sys.getEnv(name);
+		if (text == null || text == "") return 0;
+		var port = Std.parseInt(text);
+		if (port == null || port < 1024 || port > 65535) throw '$name must be between 1024 and 65535.';
+		return port;
+	}
+
+	static function randomHex(length:Int):String {
+		var bytes:haxe.io.Bytes = crossbyte.crypto.SecureRandom.getSecureRandomBytes(length);
+		return bytes.toHex();
 	}
 
 	static function builtInAdapters():Array<Adapter> {
@@ -150,7 +159,7 @@ class Agent {
 			return;
 		}
 		frame++;
-		server.pump(handle);
+		server.pump();
 		// Not caught: an exception the app throws while handling input is the app's own uncaught error.
 		pumpInput();
 		pumpWaiters();
@@ -159,30 +168,15 @@ class Agent {
 
 	// Requests
 
+	/** Called by the endpoint once a request has passed its checks (host, origin, token) and its arguments parsed. */
 	static function handle(request:Request):Void {
 		try {
-			if (!authorized(request)) throw new AgentError(403, "unauthorized", "Authorization required.");
-			if (request.method != "POST") throw new AgentError(405, "bad_request", "Use POST.");
-			if (!StringTools.startsWith(request.path, PREFIX)) throw new AgentError(404, "unknown_op", 'Unknown endpoint; this app speaks protocol $PROTOCOL at $PREFIX.');
-			var args:Dynamic = request.body == "" ? {} : Json.parse(request.body);
-			if (args == null || Type.typeof(args) != TObject) throw "The body must be a JSON object.";
-			dispatch(request.path.substr(PREFIX.length), args, request);
+			dispatch(request.op, request.args, request);
 		} catch (error:AgentError) {
 			fail(request, error);
 		} catch (error:Dynamic) {
 			fail(request, new AgentError(400, "bad_request", Std.string(error)));
 		}
-	}
-
-	/** Loopback host, no browser origin, JSON only, and the bearer token. */
-	static function authorized(request:Request):Bool {
-		if (request.hasHeader("origin")) return false;
-		var host = request.header("host");
-		if (host != '127.0.0.1:${server.port}' && host != 'localhost:${server.port}') return false;
-		var type = request.header("content-type");
-		if (type == null || !StringTools.startsWith(type.toLowerCase(), "application/json")) return false;
-		var auth = request.header("authorization");
-		return auth != null && constantEquals(auth, "Bearer " + token);
 	}
 
 	static function dispatch(op:String, args:Dynamic, request:Request):Void {
@@ -476,6 +470,7 @@ class Agent {
 		var entry:LogEntry = {seq: 0, time: Date.now().getTime(), level: level, message: message.length > 4000 ? message.substr(0, 4000) + "..." : message};
 		if (source != null) entry.source = source;
 		logs.add(entry);
+		if (server != null) server.publish("log", entry);
 	}
 
 	/** Called from lime.utils.Log through the init macro. */
@@ -497,6 +492,7 @@ class Agent {
 		}
 		lastErrorValue = error;
 		lastError = errors.add({seq: 0, time: Date.now().getTime(), message: describe(error), stack: frames(stack), fatal: fatal});
+		if (server != null) server.publish("error", lastError);
 		log("error", lastError.message);
 	}
 
@@ -532,7 +528,7 @@ class Agent {
 	}
 
 	static function fail(request:Request, error:AgentError):Void {
-		if (request.waiting()) request.respond(error.status, Json.stringify({error: {code: error.code, message: error.message}}));
+		if (request.waiting()) request.respond(error.status, Endpoint.error(error.code, error.message));
 	}
 
 	static function integer(value:Dynamic, fallback:Int, min:Int, max:Null<Int>):Int {
@@ -548,13 +544,6 @@ class Agent {
 		var n:Float = value;
 		if (!Math.isFinite(n)) throw "Expected a finite number.";
 		return n;
-	}
-
-	static function constantEquals(a:String, b:String):Bool {
-		if (a.length != b.length) return false;
-		var difference = 0;
-		for (i in 0...a.length) difference |= a.charCodeAt(i) ^ b.charCodeAt(i);
-		return difference == 0;
 	}
 
 	static function appName():String {

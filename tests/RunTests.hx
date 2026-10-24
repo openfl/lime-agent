@@ -2,6 +2,7 @@ package;
 
 import haxe.Json;
 import haxe.io.Bytes;
+import haxe.io.BytesBuffer;
 import haxe.io.Path;
 import sys.FileSystem;
 import sys.io.File;
@@ -36,6 +37,7 @@ class RunTests {
 		Sys.putEnv("LIME_AGENT_REGISTRY", registry);
 		try {
 			endpoint();
+			webSocket();
 			mcp();
 			if (FileSystem.exists(feathersExe)) feathers();
 			else Sys.println("skip Feathers UI sample (not built: samples/feathers)");
@@ -168,6 +170,74 @@ class RunTests {
 		check(File.getContent(crash).indexOf(entry.token) < 0, "crash record holds no token");
 		check(!FileSystem.exists(entry.path), "a crashed app removes its registry entry");
 		ok("an uncaught exception writes a crash record with its stack and recent logs");
+		close(app);
+	}
+
+	// WebSocket
+
+	static function webSocket():Void {
+		var app = launch(true);
+		var entry:Dynamic = app.entry;
+		check(entry.wsPort != null && entry.wsPort != entry.port, "the registry entry has the WebSocket port");
+
+		// The same refusals as HTTP, at the upgrade.
+		check(WebSocketClient.upgrade(entry, ["Authorization" => "Bearer wrong-token-wrong-token-wrong"]) == 403, "wrong token");
+		check(WebSocketClient.upgrade(entry, ["Origin" => "https://example.invalid"]) == 403, "browser origin");
+		check(WebSocketClient.upgrade(entry, ["Host" => "evil.example:" + entry.wsPort]) == 403, "foreign Host (DNS rebinding)");
+		check(WebSocketClient.upgrade(entry, [], "/lime-agent/v2") == 404, "unknown protocol version");
+		ok("WebSocket upgrades refuse wrong tokens, browser origins, foreign hosts and other versions");
+
+		var ws = new WebSocketClient(entry);
+		var info = ws.call("info");
+		check(info.status == 200 && info.result.app.pid == entry.pid && info.result.protocol.version == 1, "info over WebSocket");
+		var scale:Float = info.result.window.scale;
+		function at(v:Float) return v * scale;
+		checkColor(png(ws.call("screenshot").result.pngBase64), Math.round(at(100)), Math.round(at(60)), 0x0066FF, "screenshot over WebSocket");
+		var clicked = ws.call("input", {events: [{type: "mouse_move", x: at(100), y: at(60)}, {type: "mouse_down", x: at(100), y: at(60)}, {type: "mouse_up", x: at(100), y: at(60)}]});
+		check(clicked.status == 200 && ws.call("info").result.extra.clicks == 1, "input over WebSocket");
+		check(extra(entry).clicks == 1, "HTTP answers beside the WebSocket");
+		ok("info, screenshot and input over a WebSocket, with HTTP answering beside it");
+
+		var unknown = ws.call("nothing");
+		check(unknown.status == 404 && unknown.error.code == "unknown_op", "unknown op: " + Json.stringify(unknown));
+		var refused = ws.call("command", {name: "launch_missiles"});
+		check(refused.status == 404 && refused.error.code == "unknown_op", "unknown command");
+		ws.sendText("not json");
+		var bad = ws.next();
+		check(bad.status == 400 && bad.id == null && bad.error.code == "bad_request", "bad message: " + Json.stringify(bad));
+		ok("WebSocket errors carry the status and code the same call gets over HTTP");
+
+		send(entry, [{type: "key_down", key: "f2"}]); // busy for 0.5 s
+		ws.send({id: "slow", op: "wait_idle", args: {timeoutMs: 3000}});
+		ws.send({id: "fast", op: "info"});
+		var first = ws.next(), second = ws.next();
+		check(first.id == "fast" && second.id == "slow" && second.result.idle == true, "answers by id: " + first.id + ", " + second.id);
+		ok("calls in flight together are answered as each finishes, matched by id");
+
+		var subscribed = ws.call("subscribe", {events: ["log", "error"]});
+		check(subscribed.status == 200 && (subscribed.result.events : Array<String>).join(",") == "log,error", "subscribe");
+		check(ws.call("subscribe", {events: ["frames"]}).status == 400, "unknown events are refused");
+		send(entry, [{type: "key_down", key: "f4"}, {type: "key_down", key: "f5"}]);
+		var pushed:Array<Dynamic> = [];
+		waitFor(() -> {
+			pushed.push(ws.next());
+			pushed.filter(m -> m.event == "error" && m.entry.message == "sample reported error").length == 1
+				&& pushed.filter(m -> m.event == "log" && m.entry.level == "warn" && m.entry.message == "sample warning").length == 1;
+		}, 10, "log and error events");
+		check(pushed.filter(m -> m.event == "error")[0].entry.stack.length > 0, "a pushed error carries its stack");
+		ok("subscribers get log and error events as they happen");
+
+		try send(entry, [{type: "key_down", key: "f12"}]) catch (_:Dynamic) {}
+		var fatal:Dynamic = null;
+		waitFor(() -> {
+			var message = ws.next();
+			if (message.event == "error" && message.entry.fatal == true) fatal = message.entry;
+			fatal != null;
+		}, 10, "the fatal error event");
+		check(fatal.message == "sample crash", "fatal event: " + Json.stringify(fatal));
+		ok("a subscriber hears the error that ends the app before its connection closes");
+
+		ws.close();
 		close(app);
 	}
 
@@ -422,5 +492,136 @@ class RunTests {
 	static function fatal(message:String):Void {
 		Sys.println(message);
 		Sys.exit(2);
+	}
+}
+
+/**
+	A WebSocket client (RFC 6455) on a plain socket, so the tests need only the standard library
+	and check crossbyte's server against a client that is not crossbyte's.
+**/
+class WebSocketClient {
+	static inline var GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+
+	var socket:Socket;
+	var id = 0;
+	var queue:Array<Dynamic> = [];
+
+	public function new(entry:Dynamic) {
+		var opened = open(entry, [], "/lime-agent/v1");
+		if (opened.status != 101) throw 'WebSocket upgrade answered ${opened.status}.';
+		socket = opened.socket;
+	}
+
+	/** The status an upgrade with these headers gets. */
+	public static function upgrade(entry:Dynamic, headers:Map<String, String>, path = "/lime-agent/v1"):Int {
+		var opened = open(entry, headers, path);
+		opened.socket.close();
+		return opened.status;
+	}
+
+	static function open(entry:Dynamic, headers:Map<String, String>, path:String):{status:Int, socket:Socket} {
+		var raw = Bytes.alloc(16);
+		for (i in 0...16) raw.set(i, Std.random(256));
+		var key = haxe.crypto.Base64.encode(raw);
+		var all = ["Host" => '127.0.0.1:${entry.wsPort}', "Authorization" => 'Bearer ${entry.token}'];
+		for (name => value in headers) all.set(name, value);
+		var head = 'GET $path HTTP/1.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: $key\r\n';
+		for (name => value in all) head += '$name: $value\r\n';
+		var socket = new Socket();
+		socket.setTimeout(15);
+		socket.connect(new Host("127.0.0.1"), entry.wsPort);
+		socket.output.writeString(head + "\r\n");
+		socket.output.flush();
+		// A byte at a time, so no frame that follows the head is read with it. The head is ASCII.
+		var text = "";
+		while (!StringTools.endsWith(text, "\r\n\r\n")) {
+			var byte = try socket.input.readByte() catch (_:haxe.io.Eof) break;
+			text += String.fromCharCode(byte);
+		}
+		var status = text.length >= 12 ? Std.parseInt(text.substring(9, 12)) : 0;
+		if (status == 101) {
+			var accept = haxe.crypto.Base64.encode(haxe.crypto.Sha1.make(Bytes.ofString(key + GUID)));
+			if (text.indexOf("Sec-WebSocket-Accept: " + accept) < 0) throw "Wrong Sec-WebSocket-Accept: " + text;
+		}
+		return {status: status, socket: socket};
+	}
+
+	/** Sends an op and returns its answer; anything else that arrives first is kept for `next`. */
+	public function call(op:String, ?args:Dynamic):Dynamic {
+		var mine = ++id;
+		send({id: mine, op: op, args: args == null ? {} : args});
+		for (message in queue) if (message.id == mine) {
+			queue.remove(message);
+			return message;
+		}
+		while (true) {
+			var message = Json.parse(receive());
+			if (message.id == mine) return message;
+			queue.push(message);
+		}
+	}
+
+	public function send(message:Dynamic):Void {
+		sendText(Json.stringify(message));
+	}
+
+	/** The next message: a kept one first, else the next to arrive. */
+	public function next():Dynamic {
+		return queue.length > 0 ? queue.shift() : Json.parse(receive());
+	}
+
+	public function sendText(text:String):Void {
+		frame(0x1, Bytes.ofString(text));
+	}
+
+	public function close():Void {
+		try frame(0x8, Bytes.ofString("")) catch (_:Dynamic) {}
+		socket.close();
+	}
+
+	/** Clients mask every frame. */
+	function frame(opcode:Int, payload:Bytes):Void {
+		var out = new BytesBuffer();
+		out.addByte(0x80 | opcode);
+		if (payload.length < 126) out.addByte(0x80 | payload.length);
+		else if (payload.length < 65536) {
+			out.addByte(0x80 | 126);
+			out.addByte(payload.length >> 8);
+			out.addByte(payload.length & 0xFF);
+		} else {
+			out.addByte(0x80 | 127);
+			for (_ in 0...4) out.addByte(0);
+			for (shift in [24, 16, 8, 0]) out.addByte(payload.length >> shift & 0xFF);
+		}
+		var mask = [for (_ in 0...4) Std.random(256)];
+		for (byte in mask) out.addByte(byte);
+		for (i in 0...payload.length) out.addByte(payload.get(i) ^ mask[i % 4]);
+		socket.output.write(out.getBytes());
+		socket.output.flush();
+	}
+
+	/** One whole text message, answering pings and joining continuation frames. */
+	function receive():String {
+		var message = new BytesBuffer();
+		while (true) {
+			var first = socket.input.readByte(), second = socket.input.readByte();
+			if (second & 0x80 != 0) throw "A server must not mask its frames.";
+			var length = second & 0x7F;
+			if (length == 126) length = socket.input.readByte() << 8 | socket.input.readByte();
+			else if (length == 127) {
+				length = 0;
+				for (_ in 0...8) length = length << 8 | socket.input.readByte();
+			}
+			var payload = socket.input.read(length);
+			switch first & 0x0F {
+				case 0x8: throw "The app closed the WebSocket.";
+				case 0x9: frame(0xA, payload);
+				case 0xA:
+				case 0x2: throw "The app sent a binary message.";
+				default:
+					message.add(payload);
+					if (first & 0x80 != 0) return message.getBytes().toString();
+			}
+		}
 	}
 }

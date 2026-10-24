@@ -8,16 +8,19 @@
 		"debug",
 		"testing",
 		"mcp",
-		"agent"
+		"agent",
+		"websocket"
 	],
-	"description": "Lets coding agents see, debug and drive a running Lime app through a loopback endpoint and an MCP server.",
-	"version": "0.1.0",
+	"description": "Lets coding agents see, debug and drive a running Lime app through a loopback endpoint (HTTP and WebSocket) and an MCP server.",
+	"version": "0.2.0",
 	"classPath": "src",
-	"releasenote": "First development release: screenshot, UI tree, logs, errors, input and an MCP server.",
+	"releasenote": "The endpoint runs on crossbyte, and apps also answer over a WebSocket, which can push log and error events. Native builds need libhxcpp in place of hxcpp: run haxelib run libhxcpp setup once.",
 	"contributors": [
 		"Dimensionscape"
 	],
 	"dependencies": {
-		"lime": ""
+		"lime": "",
+		"crossbyte": "1.0.0",
+		"libhxcpp": ""
 	}
 }
