@@ -20,6 +20,12 @@ class LimeAgent {
 	/** Replaces reading the window framebuffer, for renderers `readPixels` cannot see. */
 	public static var capture:Null<Window->Image> = null;
 
+	/**
+		A short name for a display object in the UI tree ("card KH", "pile t3"), or null for none. Called with each
+		object the tree lists (an OpenFL or Graphaxe display object); a labelled object is always listed.
+	**/
+	public static var label:Null<Dynamic->Null<String>> = null;
+
 	static var infos:Array<{name:String, read:Void->Dynamic}> = [];
 	static var commands:Map<String, Dynamic->Dynamic> = new Map();
 	static var adapters:Array<Adapter> = [];

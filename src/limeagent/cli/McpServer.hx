@@ -9,11 +9,11 @@ import limeagent.cli.AppClient;
 	It reads the registry and talks only to the loopback ports listed there.
 **/
 class McpServer {
-	public static inline var VERSION = "0.2.0";
+	public static inline var VERSION = "0.3.0";
 	static var PROTOCOLS = ["2025-06-18", "2025-03-26", "2024-11-05"];
 
 	static var INSTRUCTIONS = "Inspect and drive running Lime/OpenFL apps that were launched with LIME_AGENT=1. "
-		+ "Start with list_apps. Coordinates for click and scroll are pixels in the screenshot image. "
+		+ "Start with list_apps. Coordinates for click, drag and scroll are pixels in the screenshot image. "
 		+ "After input, call wait_idle before taking a screenshot. Input needs the app to be launched with LIME_AGENT_INPUT=1.";
 
 	public static function run():Void {

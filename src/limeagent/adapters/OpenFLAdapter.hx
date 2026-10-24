@@ -45,37 +45,50 @@ class OpenFLAdapter extends Adapter {
 		var stage = stage();
 		if (stage == null) return null;
 		var nodes = [];
-		visit(stage, stage, nodes, options);
+		visit(stage, stage, nodes, options, 0);
 		return nodes;
 	}
 
-	function visit(object:DisplayObject, stage:Stage, out:Array<TreeNode>, options:TreeOptions):Void {
-		if (options.full() || (!object.visible && !options.includeHidden)) return;
+	/**
+		Lists `object` into `out`, or only its children when it says nothing of its own. Returns the children the limits
+		left out that belong to the nearest listed ancestor, since a flattened object has no line to count them on.
+	**/
+	function visit(object:DisplayObject, stage:Stage, out:Array<TreeNode>, options:TreeOptions, depth:Int):Int {
 		var node = describe(object, stage);
-		var children = [];
+		var children = [], more = 0;
 		if (descend(object) && Std.isOfType(object, DisplayObjectContainer)) {
 			var container:DisplayObjectContainer = cast object;
-			for (i in 0...container.numChildren) visit(container.getChildAt(i), stage, children, options);
+			for (i in 0...container.numChildren) {
+				var child = container.getChildAt(i);
+				if (!child.visible && !options.includeHidden) continue;
+				if (options.full() || options.tooDeep(depth)) more++;
+				else more += visit(child, stage, children, options, depth + 1);
+			}
 		}
 		if (node == null) {
 			for (child in children) out.push(child);
-			return;
+			return more;
 		}
+		if (!object.visible) node.hidden = true;
 		if (children.length > 0) node.children = children;
+		if (more > 0) node.more = more;
 		options.count++;
 		out.push(node);
+		return 0;
 	}
 
-	/** Null for objects with no text, no name and no sign of being clickable; their children are kept. */
+	/** Null for objects with no text, no name, no label and no sign of being clickable; their children are kept. */
 	function describe(object:DisplayObject, stage:Stage):Null<TreeNode> {
 		var text = textOf(object);
 		var name = Adapter.meaningfulName(object.name);
+		var label = Adapter.labelOf(object);
 		var enabled = enabledOf(object);
-		if (text == null && name == null && enabled == null && !interactive(object)) return null;
+		if (text == null && name == null && label == null && enabled == null && !interactive(object)) return null;
 		var bounds = object.getBounds(stage);
 		var node:TreeNode = {kind: Adapter.shortKind(object), x: Math.round(bounds.x), y: Math.round(bounds.y),
 			width: Math.round(bounds.width), height: Math.round(bounds.height)};
 		if (name != null) node.name = name;
+		if (label != null) node.label = label;
 		if (text != null) node.text = text;
 		if (enabled != null) node.enabled = enabled;
 		if (stage.focus == object) node.focused = true;

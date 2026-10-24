@@ -1,2 +1,8 @@
 samples/*/Export/
 run.n
+samples/graphaxe/bin/
+samples/graphaxe/graphaxe-build/
+samples/graphaxe/.graphaxe/
+samples/graphaxe/.aedifex/
+samples/graphaxe/project.xml
+samples/graphaxe/.graphaxe-project.xml

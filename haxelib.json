@@ -12,9 +12,9 @@
 		"websocket"
 	],
 	"description": "Lets coding agents see, debug and drive a running Lime app through a loopback endpoint (HTTP and WebSocket) and an MCP server.",
-	"version": "0.2.0",
+	"version": "0.3.0",
 	"classPath": "src",
-	"releasenote": "The endpoint runs on crossbyte, and apps also answer over a WebSocket, which can push log and error events. Native builds need libhxcpp in place of hxcpp: run haxelib run libhxcpp setup once.",
+	"releasenote": "A drag tool, and a ui_tree that lists every object in a Graphaxe app with its bounds and whether a click reaches it. Apps can name their objects with LimeAgent.label.",
 	"contributors": [
 		"Dimensionscape"
 	],

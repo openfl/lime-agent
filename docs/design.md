@@ -38,13 +38,15 @@ Refused with 403 before anything else: a wrong or missing token, any `Origin` he
 
 Success is HTTP 200 with a JSON object. Failure is a non-200 status with `{"error": {"code": "...", "message": "..."}}`. Codes: `unauthorized` 403, `input_disabled` 403, `unknown_op` 404, `bad_request` 400, `too_large` 413, `sensitive` 423, `unsupported` 501 (no tree adapter), `unavailable` 503 (no window, or no frame within 3 seconds), `internal` 500.
 
+Tree nodes leave out what does not apply. `label` is the app's name for the object (`LimeAgent.label`). `hidden` marks an invisible object, listed only with `includeHidden`. `pointer: false` means a click there does not reach it: it, or an ancestor, takes no pointer input. `covered` means it takes input but other objects cover every point of it, and `at` is a point that reaches it when its centre is covered. `more` counts children that `maxNodes` or `maxDepth` left out, and `truncated` says that happened anywhere. The Graphaxe adapter lists every visible object and fills in `pointer`, `covered` and `at` by Graphaxe's own hit test; the OpenFL and Feathers adapters list named, labelled, text and clickable objects and flatten the rest.
+
 All coordinates are **screenshot pixels**: the pixel grid of the PNG that `screenshot` returns. The app divides by the window scale before dispatching to Lime, so an agent can click exactly where it sees something.
 
 | Op | Arguments | Result |
 | --- | --- | --- |
 | `info` | none | `protocol {version, min}`, `app {name, version, pid, title}`, `lime`, `frameworks`, `capabilities`, `window {width, height, scale, viewWidth, viewHeight}`, `frame`, `sensitive`, `busy`, `input`, `lastLog`, `lastError`, `extra` (app-supplied facts, left out while sensitive) |
 | `screenshot` | none | `pngBase64`, `width`, `height` (always the view size) |
-| `tree` | `maxNodes` (default 400), `includeHidden` | `adapter`, `width`, `height`, `truncated`, `nodes`: nested `{kind, name, text, x, y, width, height, enabled, focused, children}` |
+| `tree` | `maxNodes` (default 400), `maxDepth` (default 30), `includeHidden` | `adapter`, `width`, `height`, `truncated`, `nodes`: nested `{kind, name, label, text, x, y, width, height, enabled, focused, hidden, pointer, covered, at, children, more}` |
 | `input` | `events`: 1 to 200 of `{type: mouse_move \| mouse_down \| mouse_up \| wheel \| key_down \| key_up \| text, ...}`; the whole batch is validated before any is sent | `{frame}` once every event has been dispatched and two more frames have run |
 | `logs` | `since` (sequence; 0 for the newest), `limit`, `minLevel` | `entries {seq, time, level, message, source}`, `next`, `dropped` (1000 kept) |
 | `errors` | `since`, `limit` | `entries {seq, time, message, stack, fatal}`, `next`, `dropped` (100 kept) |
@@ -98,6 +100,7 @@ LimeAgent.addCommand("open_preferences", args -> {...}); // app-chosen actions, 
 LimeAgent.reportError(error);                          // errors the app caught itself
 LimeAgent.capture = window -> renderer.capture();      // replace readPixels (Vulkan, custom renderers)
 LimeAgent.addAdapter(adapter);                         // custom UI tree, view size or capture
+LimeAgent.label = object -> ...;                       // a short name for a display object in the tree ("card KH"), or null
 LimeAgent.setStateHooks(snapshot, restore);            // phase 2; stored, unused in phase 1
 ```
 
@@ -115,6 +118,7 @@ The library has no file access beyond its own registry and crash records, runs n
 | `screenshot` | The app's window as an image |
 | `ui_tree` | The UI as an indented outline, one control per line with its bounds |
 | `click` | Move, press, release at `x, y`; `button`, `double` |
+| `drag` | Move to and press at `fromX, fromY`, `steps` moves (default 10) to `toX, toY`, release there; `button`, `holdMs` |
 | `type` | Committed text into the focused control |
 | `key` | A key press with modifiers (`press`, `down` or `up`) |
 | `scroll` | Wheel steps at an optional point |

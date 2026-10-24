@@ -12,8 +12,8 @@ import limeagent.LimeAgent;
 #end
 
 /**
-	A plain Lime app, no framework, that exercises every lime-agent endpoint:
-	a button that counts clicks, a bar that grows with typed text, keys for busy, sensitive, errors and a crash.
+	A plain Lime app, no framework, that exercises every lime-agent endpoint: a button that counts clicks, a chip
+	to drag, a bar that grows with typed text, keys for busy, sensitive, errors and a crash.
 **/
 class Main extends Application {
 	public static inline var BUTTON_X = 40;
@@ -21,11 +21,20 @@ class Main extends Application {
 	public static inline var BUTTON_W = 200;
 	public static inline var BUTTON_H = 80;
 	public static inline var BAR_Y = 160;
+	public static inline var CHIP_SIZE = 40;
 
 	public var clicks = 0;
 	public var typed = "";
 	public var lastKey = "";
 	public var wheel = 0.0;
+	public var chipX = 300.0;
+	public var chipY = 240.0;
+	/** The pointer events of the last drag of the chip, in order: "down x,y", "move x,y"..., "up x,y". */
+	public var drag:Array<String> = [];
+
+	var dragging = false;
+	var grabX = 0.0;
+	var grabY = 0.0;
 
 	var busyUntil = 0.0;
 	var sensitiveUntil = 0.0;
@@ -39,6 +48,8 @@ class Main extends Application {
 		LimeAgent.addInfo("typed", () -> typed);
 		LimeAgent.addInfo("lastKey", () -> lastKey);
 		LimeAgent.addInfo("wheel", () -> wheel);
+		LimeAgent.addInfo("chip", () -> {x: chipX, y: chipY});
+		LimeAgent.addInfo("drag", () -> drag);
 		LimeAgent.addCommand("reset", _ -> {
 			clicks = 0;
 			typed = "";
@@ -53,6 +64,27 @@ class Main extends Application {
 			clicks++;
 			trace("clicked " + clicks);
 		}
+		if (button == LEFT && x >= chipX && x < chipX + CHIP_SIZE && y >= chipY && y < chipY + CHIP_SIZE) {
+			dragging = true;
+			grabX = x - chipX;
+			grabY = y - chipY;
+			drag = ['down ${Math.round(x)},${Math.round(y)}'];
+		}
+	}
+
+	override public function onMouseMove(x:Float, y:Float):Void {
+		if (!dragging) return;
+		chipX = x - grabX;
+		chipY = y - grabY;
+		drag.push('move ${Math.round(x)},${Math.round(y)}');
+	}
+
+	override public function onMouseUp(x:Float, y:Float, button:MouseButton):Void {
+		if (!dragging || button != LEFT) return;
+		dragging = false;
+		chipX = x - grabX;
+		chipY = y - grabY;
+		drag.push('up ${Math.round(x)},${Math.round(y)}');
 	}
 
 	override public function onMouseWheel(deltaX:Float, deltaY:Float, deltaMode:MouseWheelMode):Void {
@@ -96,6 +128,7 @@ class Main extends Application {
 				// Blue for an even number of clicks, orange for odd.
 				if (clicks % 2 == 0) rect(BUTTON_X, BUTTON_Y, BUTTON_W, BUTTON_H, 0, 0.4, 1) else rect(BUTTON_X, BUTTON_Y, BUTTON_W, BUTTON_H, 1, 0.5, 0);
 				rect(BUTTON_X, BAR_Y, Math.min(typed.length * 10, 500), 20, 0, 0.8, 0.2);
+				rect(chipX, chipY, CHIP_SIZE, CHIP_SIZE, 0.6, 0.2, 0.8);
 				gl.disable(gl.SCISSOR_TEST);
 			default:
 		}
@@ -115,11 +148,12 @@ class SampleAdapter extends Adapter {
 	override public function tree(options:TreeOptions):Null<Array<TreeNode>> {
 		var s = main.window.scale;
 		function px(v:Float) return Math.round(v * s);
-		options.count += 2;
+		options.count += 3;
 		return [
 			{kind: "Button", name: "counter", text: 'Clicked ${main.clicks}', x: px(Main.BUTTON_X), y: px(Main.BUTTON_Y), width: px(Main.BUTTON_W),
 				height: px(Main.BUTTON_H), enabled: true},
-			{kind: "TextInput", name: "typed", text: main.typed, x: px(Main.BUTTON_X), y: px(Main.BAR_Y), width: px(500), height: px(20), focused: true}
+			{kind: "TextInput", name: "typed", text: main.typed, x: px(Main.BUTTON_X), y: px(Main.BAR_Y), width: px(500), height: px(20), focused: true},
+			{kind: "Chip", name: "chip", x: px(main.chipX), y: px(main.chipY), width: px(Main.CHIP_SIZE), height: px(Main.CHIP_SIZE)}
 		];
 	}
 }

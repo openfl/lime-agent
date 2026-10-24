@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.3.0 - 2026-10-24
+
+### Added
+
+- A `drag` tool: press at `fromX, fromY`, move to `toX, toY` in `steps` moves (10 by default), one a frame, and
+  release there, through the app's own mouse events like `click`. `holdMs` holds the button at the start first, for
+  apps that wait for a long press. It needs `LIME_AGENT_INPUT=1`, as all input does, and works with apps on 0.2.0.
+- `LimeAgent.label`, a function that names display objects in the UI tree ("card KH", "pile t3"). A labelled object is
+  always listed, in the OpenFL, Feathers UI and Graphaxe trees.
+- Tree nodes say whether a click reaches them: `pointer: false` for an object that lets clicks through, `covered` for
+  one other objects hide completely, and `at`, a point that reaches it, when its centre is covered. `hidden` marks the
+  invisible objects that `includeHidden` lists.
+- `maxDepth` (30 by default) bounds the tree as `maxNodes` does, and `more` on a node counts the children either left
+  out. `ui_tree` takes both.
+- `samples/graphaxe`, a Graphaxe scene of cards to drag onto a pile, and tests that drive it.
+
+### Changed
+
+- The Graphaxe tree lists every visible object, not only controls and named objects, so a game's sprites, quads and
+  images show with their class, name, label, text and bounds. Bounds are the object's bounds on the stage, so a
+  rotated or pivoted object is placed right.
+
 ## 0.2.0 - 2026-10-24
 
 ### Changed

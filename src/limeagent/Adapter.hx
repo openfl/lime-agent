@@ -5,6 +5,8 @@ import lime.graphics.Image;
 typedef TreeNode = {
 	kind:String,
 	?name:String,
+	/** The app's own name for the object, from `LimeAgent.label`. */
+	?label:String,
 	?text:String,
 	x:Int,
 	y:Int,
@@ -12,24 +14,42 @@ typedef TreeNode = {
 	height:Int,
 	?enabled:Bool,
 	?focused:Bool,
-	?children:Array<TreeNode>
+	/** Listed only with `includeHidden`. */
+	?hidden:Bool,
+	/** False when a click there would not reach it: it, or something above it, takes no pointer input. */
+	?pointer:Bool,
+	/** True when it takes pointer input but other objects cover every point of it. */
+	?covered:Bool,
+	/** A point that reaches it, given when its centre is covered. */
+	?at:{x:Int, y:Int},
+	?children:Array<TreeNode>,
+	/** Children left out by `maxNodes` or `maxDepth`. */
+	?more:Int
 }
 
 /** Limits for one `tree` request; adapters stop adding nodes once `full()`. */
 class TreeOptions {
 	public var maxNodes(default, null):Int;
+	public var maxDepth(default, null):Int;
 	public var includeHidden(default, null):Bool;
 	public var count = 0;
 	public var truncated = false;
 
-	public function new(maxNodes:Int, includeHidden:Bool) {
+	public function new(maxNodes:Int, includeHidden:Bool, maxDepth = 30) {
 		this.maxNodes = maxNodes;
+		this.maxDepth = maxDepth;
 		this.includeHidden = includeHidden;
 	}
 
 	public function full():Bool {
 		if (count >= maxNodes) truncated = true;
 		return truncated;
+	}
+
+	/** True when a child at `depth` (0 for the top level) is past `maxDepth`; it is then left out and counted in `more`. */
+	public function tooDeep(depth:Int):Bool {
+		if (depth >= maxDepth) truncated = true;
+		return depth >= maxDepth;
 	}
 }
 
@@ -72,6 +92,13 @@ class Adapter {
 
 	public static function meaningfulName(name:Null<String>):Null<String> {
 		return name == null || name == "" || defaultName.match(name) ? null : name;
+	}
+
+	/** The app's `LimeAgent.label` for `object`, or null. */
+	public static function labelOf(object:Dynamic):Null<String> {
+		if (LimeAgent.label == null) return null;
+		var label:Null<String> = try LimeAgent.label(object) catch (_:Dynamic) null;
+		return label == null || label == "" ? null : label.length > 200 ? label.substr(0, 200) + "..." : label;
 	}
 
 	public static function clip(text:Null<String>):Null<String> {

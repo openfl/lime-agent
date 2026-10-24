@@ -18,6 +18,7 @@ class RunTests {
 	static var root:String;
 	static var exe:String;
 	static var feathersExe:String;
+	static var graphaxeExe:String;
 	static var registry:String;
 	static var apps:Array<Process> = [];
 	static var failures = 0;
@@ -31,6 +32,8 @@ class RunTests {
 		}]);
 		if (!FileSystem.exists(exe)) fatal('Build the sample first: $exe');
 		feathersExe = StringTools.replace(StringTools.replace(exe, "basic", "feathers"), "LimeAgentSample", "LimeAgentFeathers");
+		// Graphaxe builds into bin/ rather than Export/.
+		graphaxeExe = StringTools.replace(StringTools.replace(StringTools.replace(exe, "basic", "graphaxe"), "Export", "bin"), "LimeAgentSample", "LimeAgentGraphaxe");
 		if (!FileSystem.exists(Path.join([root, "run.n"]))) fatal("Build run.n first: haxe run.hxml");
 		registry = Path.join([Sys.getEnv(Sys.systemName() == "Windows" ? "TEMP" : "TMPDIR") ?? "/tmp", "lime-agent-test-" + Std.random(0x7FFFFFFF)]);
 		FileSystem.createDirectory(registry);
@@ -41,6 +44,8 @@ class RunTests {
 			mcp();
 			if (FileSystem.exists(feathersExe)) feathers();
 			else Sys.println("skip Feathers UI sample (not built: samples/feathers)");
+			if (FileSystem.exists(graphaxeExe)) graphaxe();
+			else Sys.println("skip Graphaxe sample (not built: samples/graphaxe)");
 		} catch (error:Dynamic) {
 			failures++;
 			Sys.println("FAIL " + error + "\n" + haxe.CallStack.toString(haxe.CallStack.exceptionStack()));
@@ -249,24 +254,8 @@ class RunTests {
 		var stale = Path.join([registry, "999999.json"]);
 		File.saveContent(stale, Json.stringify({protocol: 1, pid: 999999, name: "Gone", port: freePort(), token: StringTools.lpad("", "x", 32)}));
 
-		var server = new Process("neko", [Path.join([root, "run.n"]), "mcp"]);
-		var id = 0;
-		function rpc(method:String, ?params:Dynamic):Dynamic {
-			var message:Dynamic = {jsonrpc: "2.0", id: ++id, method: method};
-			if (params != null) message.params = params;
-			server.stdin.writeString(Json.stringify(message) + "\n");
-			server.stdin.flush();
-			var response = Json.parse(server.stdout.readLine());
-			check(response.id == id && response.jsonrpc == "2.0", 'response to $method');
-			return response;
-		}
-		function tool(name:String, ?args:Dynamic):{text:String, image:Null<String>, isError:Bool} {
-			var result = rpc("tools/call", {name: name, arguments: args == null ? {} : args}).result;
-			var content:Array<Dynamic> = result.content;
-			var text = content.filter(c -> c.type == "text").map(c -> c.text).join("\n");
-			var images = content.filter(c -> c.type == "image");
-			return {text: text, image: images.length > 0 ? images[0].data : null, isError: result.isError == true};
-		}
+		var mcp = new Mcp(root);
+		var rpc = mcp.rpc, tool = mcp.tool, server = mcp.server;
 
 		var init = rpc("initialize", {protocolVersion: "2025-06-18", capabilities: {}, clientInfo: {name: "test", version: "1"}}).result;
 		check(init.protocolVersion == "2025-06-18" && init.serverInfo.name == "lime-agent" && init.capabilities.tools != null, "initialize");
@@ -275,7 +264,7 @@ class RunTests {
 		check(Reflect.fields(rpc("ping").result).length == 0, "ping");
 		check(rpc("no/such/method").error.code == -32601, "unknown method");
 		var names = [for (t in (rpc("tools/list").result.tools : Array<Dynamic>)) t.name];
-		var expected = ["list_apps", "screenshot", "ui_tree", "click", "type", "key", "scroll", "logs", "errors", "wait_idle"];
+		var expected = ["list_apps", "screenshot", "ui_tree", "click", "drag", "type", "key", "scroll", "logs", "errors", "wait_idle"];
 		check(names.join(",") == expected.join(","), "tool list: " + names.join(","));
 		ok("MCP handshake, ping, unknown methods and the tool list");
 
@@ -308,12 +297,35 @@ class RunTests {
 		check(tool("frobnicate").isError, "unknown tool");
 		ok("screenshot, ui_tree, click, type, key, scroll, logs, errors and wait_idle work through MCP");
 
+		var scale:Float = call(first.entry, "info").window.scale;
+		var chip = ~/Chip #chip \[([0-9]+),([0-9]+) ([0-9]+)x([0-9]+)\]/;
+		check(chip.match(tool("ui_tree").text), "chip in the tree");
+		var fromX = Std.parseInt(chip.matched(1)) + Std.parseInt(chip.matched(3)) / 2, fromY = Std.parseInt(chip.matched(2)) + Std.parseInt(chip.matched(4)) / 2;
+		var toX = fromX + 150, toY = fromY + 60;
+		var dragged = tool("drag", {fromX: fromX, fromY: fromY, toX: toX, toY: toY, steps: 5});
+		check(!dragged.isError && dragged.text.indexOf("Dragged left") == 0, "drag: " + dragged.text);
+		function point(x:Float, y:Float) return '${Math.round(x / scale)},${Math.round(y / scale)}';
+		var path:Array<String> = call(first.entry, "info").extra.drag;
+		check(path.length == 7 && path[0] == "down " + point(fromX, fromY) && path[6] == "up " + point(toX, toY), "down, five moves, up: " + path.join("; "));
+		check(path.slice(1, 6).filter(e -> StringTools.startsWith(e, "move ")).length == 5 && path[5] == "move " + point(toX, toY), "moves along the path: " + path.join("; "));
+		var xs = [for (e in path) Std.parseInt(e.split(" ")[1].split(",")[0])];
+		check([for (i in 1...xs.length) xs[i] >= xs[i - 1]].indexOf(false) < 0, "the path runs from start to end");
+		checkColor(png(tool("screenshot").image), Math.round(toX), Math.round(toY), 0x9933CC, "the chip where it was dropped");
+		check(chip.match(tool("ui_tree").text) && Math.abs(Std.parseInt(chip.matched(1)) - (toX - 20 * scale)) <= 1, "the tree shows the chip where it was dropped");
+		var held = tool("drag", {fromX: toX, fromY: toY, toX: fromX, toY: fromY, holdMs: 300});
+		path = call(first.entry, "info").extra.drag;
+		check(!held.isError && path.length == 12 && path[0] == "down " + point(toX, toY) && path[11] == "up " + point(fromX, fromY), "held drag: " + path.join("; "));
+		check(tool("drag", {fromX: 1, fromY: 1, toX: 99999, toY: 1}).isError, "a drag that ends outside the view is refused");
+		ok("drag presses, moves one step a frame and releases where it was asked, and the app sees each in order");
+
 		var second = launch(false);
 		var ambiguous = tool("screenshot");
 		check(ambiguous.isError && ambiguous.text.indexOf("Several apps") >= 0, "two apps need a selector");
 		check(tool("screenshot", {app: Std.string(second.entry.pid)}).image != null, "select by pid");
 		var refused = tool("type", {app: Std.string(second.entry.pid), text: "x"});
 		check(refused.isError && refused.text.indexOf("LIME_AGENT_INPUT=1") >= 0, "input refusal explains how to enable it");
+		var noDrag = tool("drag", {app: Std.string(second.entry.pid), fromX: 10, fromY: 10, toX: 20, toY: 20});
+		check(noDrag.isError && noDrag.text.indexOf("LIME_AGENT_INPUT=1") >= 0, "drag needs input enabled");
 		close(second);
 		ok("with two apps, tools ask which one; pids select; input refusals say how to enable input");
 
@@ -373,6 +385,76 @@ class RunTests {
 		check(record.message == "feathers crash", "crash message");
 		check((record.logs : Array<String>).filter(l -> l == "[error] feathers crash").length == 1, "OpenFL's uncaught error and the crash are one error");
 		ok("an uncaught error in an OpenFL handler is recorded once, as the crash");
+		close(app);
+	}
+
+	// Graphaxe
+
+	static function graphaxe():Void {
+		var app = launch(true, graphaxeExe);
+		var entry:Dynamic = app.entry;
+		var tree = call(entry, "tree");
+		check(tree.adapter == "graphaxe", "Graphaxe adapter");
+		function all(nodes:Array<Dynamic>):Array<Dynamic> {
+			var list = [];
+			for (node in nodes) {
+				list.push(node);
+				if (node.children != null) list = list.concat(all(node.children));
+			}
+			return list;
+		}
+		function one(nodes:Array<Dynamic>, test:Dynamic->Bool, what:String):Dynamic {
+			var found = all(nodes).filter(test);
+			check(found.length == 1, 'one $what in ' + Json.stringify(nodes));
+			return found[0];
+		}
+		var nodes:Array<Dynamic> = tree.nodes;
+		var ace = one(nodes, n -> n.label == "card AS", "card AS");
+		var king = one(nodes, n -> n.label == "card KH", "card KH");
+		var queen = one(nodes, n -> n.name == "queen", "queen");
+		check(ace.kind == "Card" && ace.x == 60 && ace.y == 60 && ace.width == 80 && ace.height == 110, "the ace's class and bounds: " + Json.stringify(ace));
+		check((ace.children : Array<Dynamic>).filter(c -> c.kind == "TextField" && c.text == "A").length == 1, "the ace's rank");
+		check(queen.kind == "Card" && queen.label == null && king.x == 80 && king.y == 90, "names, labels and bounds");
+		check(king.at == null && king.covered == null && ace.at != null && ace.at.y < 90, "the ace's centre is under the king, its top edge is not: " + Json.stringify(ace));
+		check(one(nodes, n -> n.name == "shine", "shine").pointer == false, "a decoration that lets clicks through");
+		check(one(nodes, n -> n.name == "reset", "reset").text == "Reset", "a button by its text");
+		check(all(nodes).filter(n -> n.name == "secret").length == 0, "hidden objects are left out");
+		check(one(call(entry, "tree", {includeHidden: true}).nodes, n -> n.name == "secret", "secret").hidden == true, "and listed as hidden when asked");
+		var shot = png(call(entry, "screenshot").pngBase64);
+		check(shot.width == tree.width && shot.height == tree.height, "screenshot and tree share one grid");
+		checkColor(shot, king.x + 60, king.y + 60, 0xCC2222, "the king where the tree puts it");
+		checkColor(shot, queen.x + 60, queen.y + 90, 0x2244CC, "the queen where the tree puts it");
+		ok("the Graphaxe tree lists game objects by class, name, label and text, with bounds that match the screenshot");
+
+		var small = call(entry, "tree", {maxNodes: 3});
+		check(small.truncated == true && all(small.nodes).filter(n -> n.more != null && n.more > 0).length > 0, "maxNodes: " + Json.stringify(small.nodes));
+		var shallow:Array<Dynamic> = call(entry, "tree", {maxDepth: 1}).nodes;
+		check(shallow.filter(n -> n.children == null && n.more != null).length > 0, "maxDepth: " + Json.stringify(shallow));
+		ok("maxNodes and maxDepth bound the tree and say how many children were left out");
+
+		var mcp = new Mcp(root);
+		var text = mcp.tool("ui_tree").text;
+		check(~/Card \(card AS\) \[60,60 80x110\] click at [0-9]+,[0-9]+/.match(text) && ~/Quad #shine \[[0-9, x]+\] no-pointer/.match(text), "ui_tree text: " + text);
+		var pileX = 530, pileY = 105;
+		// The ace by its visible edge, dropped so its centre lands on the pile.
+		check(!mcp.tool("drag", {fromX: ace.at.x, fromY: ace.at.y, toX: pileX + ace.at.x - 100, toY: pileY + ace.at.y - 115}).isError, "drag the ace");
+		mcp.tool("wait_idle");
+		check(!mcp.tool("drag", {fromX: king.x + 40, fromY: king.y + 55, toX: pileX, toY: pileY}).isError, "drag the king");
+		mcp.tool("wait_idle");
+		var cards:Array<Dynamic> = call(entry, "info").extra.cards;
+		check(cards.filter(c -> c.label != null && c.x == 490 && c.y == 50).length == 2, "both cards on the pile: " + Json.stringify(cards));
+		var logs = mcp.tool("logs").text;
+		check(logs.indexOf("card AS on the pile") >= 0 && logs.indexOf("card KH on the pile") >= 0, "the app saw both drops: " + logs);
+		nodes = call(entry, "tree").nodes;
+		check(one(nodes, n -> n.label == "card AS", "card AS").covered == true, "the ace is now covered by the king");
+		checkColor(png(call(entry, "screenshot").pngBase64), pileX + 30, pileY + 40, 0xCC2222, "the king on top of the pile");
+		var reset = one(nodes, n -> n.name == "reset", "reset");
+		mcp.tool("click", {x: reset.x + reset.width / 2, y: reset.y + reset.height / 2});
+		mcp.tool("wait_idle");
+		cards = call(entry, "info").extra.cards;
+		check(cards.filter(c -> c.x == 490).length == 0, "reset: " + Json.stringify(cards));
+		ok("drag moves Graphaxe cards by their pointer events and drops them where asked; covered cards say so");
+		mcp.close();
 		close(app);
 	}
 
@@ -492,6 +574,40 @@ class RunTests {
 	static function fatal(message:String):Void {
 		Sys.println(message);
 		Sys.exit(2);
+	}
+}
+
+/** The MCP server, run.n, on stdin and stdout. */
+class Mcp {
+	public var server(default, null):Process;
+
+	var id = 0;
+
+	public function new(root:String) {
+		server = new Process("neko", [Path.join([root, "run.n"]), "mcp"]);
+	}
+
+	public function rpc(method:String, ?params:Dynamic):Dynamic {
+		var message:Dynamic = {jsonrpc: "2.0", id: ++id, method: method};
+		if (params != null) message.params = params;
+		server.stdin.writeString(Json.stringify(message) + "\n");
+		server.stdin.flush();
+		var response = Json.parse(server.stdout.readLine());
+		if (response.id != id || response.jsonrpc != "2.0") throw 'Wrong response to $method: ' + Json.stringify(response);
+		return response;
+	}
+
+	public function tool(name:String, ?args:Dynamic):{text:String, image:Null<String>, isError:Bool} {
+		var result = rpc("tools/call", {name: name, arguments: args == null ? {} : args}).result;
+		var content:Array<Dynamic> = result.content;
+		var text = content.filter(c -> c.type == "text").map(c -> c.text).join("\n");
+		var images = content.filter(c -> c.type == "image");
+		return {text: text, image: images.length > 0 ? images[0].data : null, isError: result.isError == true};
+	}
+
+	public function close():Void {
+		server.stdin.close();
+		server.exitCode();
 	}
 }
 

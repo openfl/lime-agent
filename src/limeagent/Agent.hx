@@ -193,7 +193,7 @@ class Agent {
 				}
 			case "tree":
 				requireView();
-				ok(request, tree(integer(args.maxNodes, 400, 1, 5000), args.includeHidden == true));
+				ok(request, tree(integer(args.maxNodes, 400, 1, 5000), args.includeHidden == true, integer(args.maxDepth, 30, 1, 200)));
 			case "input":
 				requireInput();
 				requireView();
@@ -359,8 +359,8 @@ class Agent {
 		return {pngBase64: Base64.encode(png), width: image.width, height: image.height};
 	}
 
-	static function tree(maxNodes:Int, includeHidden:Bool):Dynamic {
-		var options = new TreeOptions(maxNodes, includeHidden);
+	static function tree(maxNodes:Int, includeHidden:Bool, maxDepth:Int):Dynamic {
+		var options = new TreeOptions(maxNodes, includeHidden, maxDepth);
 		for (adapter in activeAdapters()) {
 			var nodes = adapter.tree(options);
 			if (nodes != null) {

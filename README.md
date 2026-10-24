@@ -1,6 +1,6 @@
 # lime-agent
 
-lime-agent lets a coding agent (Claude Code, Codex, Cursor and others) look at, read and drive a Lime app while you develop it. The agent can take a screenshot of your app's window, read its UI as a list of controls, read its logs and errors with stack traces, and click, type, press keys and scroll.
+lime-agent lets a coding agent (Claude Code, Codex, Cursor and others) look at, read and drive a Lime app while you develop it. The agent can take a screenshot of your app's window, read its UI as a list of controls, read its logs and errors with stack traces, and click, drag, type, press keys and scroll.
 
 It works with plain Lime, OpenFL, Feathers UI and Graphaxe apps. You add one haxelib and set an environment variable when you launch a development build. Your app's code does not change; native builds use libhxcpp (see [Install](#install)).
 
@@ -60,7 +60,7 @@ In PowerShell:
 $env:LIME_AGENT = '1'; $env:LIME_AGENT_INPUT = '1'; lime test windows
 ```
 
-`LIME_AGENT=1` lets agents look (screenshot, UI tree, logs, errors). `LIME_AGENT_INPUT=1` also lets them click, type, press keys and scroll; leave it out when you only want the agent to watch. On start the app prints a line like `[lime-agent listening on 127.0.0.1:50916 (WebSocket 50917), input on]`.
+`LIME_AGENT=1` lets agents look (screenshot, UI tree, logs, errors). `LIME_AGENT_INPUT=1` also lets them click, drag, type, press keys and scroll; leave it out when you only want the agent to watch. On start the app prints a line like `[lime-agent listening on 127.0.0.1:50916 (WebSocket 50917), input on]`.
 
 ## Connect your agent
 
@@ -108,8 +108,9 @@ To see what the MCP server sees, run `haxelib run lime-agent list` in a terminal
 | --- | --- |
 | `list_apps` | Running apps with lime-agent on, their window size, whether input is allowed, and recent crashes |
 | `screenshot` | The app's window as an image |
-| `ui_tree` | The UI as an outline: kind, name, text and bounds of each control |
+| `ui_tree` | The UI as an outline: kind, name, label, text and bounds of each control or game object, and whether a click reaches it |
 | `click` | Click at a point (left, right or middle; double-click) |
+| `drag` | Press at one point, move to another one frame at a time and release there: drag and drop, sliders, selections |
 | `type` | Type text into the focused control |
 | `key` | Press a key, with ctrl, shift, alt or meta |
 | `scroll` | Scroll with the mouse wheel, optionally at a point |
@@ -117,7 +118,7 @@ To see what the MCP server sees, run `haxelib run lime-agent list` in a terminal
 | `errors` | Errors with stack traces; for an app that crashed, its crash record |
 | `wait_idle` | Wait until the app has handled the input and settled |
 
-Coordinates are pixels in the screenshot, so an agent clicks where it sees something. With one app running, tools use it; with several, they take an `app` argument (the pid or part of the name).
+Coordinates are pixels in the screenshot, so an agent clicks where it sees something. In `ui_tree`, an object a click cannot reach says so: `no-pointer` when it lets clicks through, `covered` when other objects cover all of it, and `click at x,y` when its centre is covered but another point is not. With one app running, tools use it; with several, they take an `app` argument (the pid or part of the name).
 
 Input goes through Lime's own window events, the same path as a real mouse and keyboard, so your app's handlers run exactly as they would for a person.
 
@@ -178,9 +179,10 @@ LimeAgent.addCommand("restart_level", args -> {       // an action agents can ru
 LimeAgent.reportError(error);                         // an error you caught but want the agent to see
 LimeAgent.capture = window -> renderer.capture();     // for renderers readPixels cannot see (Vulkan)
 LimeAgent.addAdapter(new MyTreeAdapter());            // a UI tree for a custom framework
+LimeAgent.label = object -> object is Card ? (cast object : Card).id : null; // names game objects in ui_tree ("card KH")
 ```
 
-OpenFL, Feathers UI and Graphaxe UI trees are built in. A plain Lime app has no display list, so it shows a UI tree only if it adds an adapter; `samples/basic` shows how.
+OpenFL, Feathers UI and Graphaxe UI trees are built in. The Graphaxe tree lists every visible object, so a game's sprites, quads and images show with their bounds even when nothing names them; `LimeAgent.label` lets the app name them. A plain Lime app has no display list, so it shows a UI tree only if it adds an adapter; `samples/basic` shows how.
 
 ## Limits
 
@@ -197,10 +199,11 @@ The tests need no network beyond loopback and make no API calls.
 haxe run.hxml
 haxelib run lime build samples/basic windows
 haxelib run lime build samples/feathers windows
+cd samples/graphaxe && haxelib run graphaxe build windows && cd ../..
 haxe tests.hxml
 ```
 
-They launch the samples, check every endpoint over HTTP and the WebSocket (including the security refusals), drive the samples through the MCP server, and crash them on purpose to check the crash record. The samples build with libhxcpp, like any app that uses lime-agent.
+They launch the samples, check every endpoint over HTTP and the WebSocket (including the security refusals), drive the samples through the MCP server (dragging cards in the Graphaxe sample), and crash them on purpose to check the crash record. The Graphaxe sample needs Graphaxe and `haxelib dev lime-agent` pointing at the checkout; the tests skip it when it is not built. The samples build with libhxcpp, like any app that uses lime-agent.
 
 ## Protocol
 

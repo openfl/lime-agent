@@ -16,9 +16,14 @@ class Tools {
 	public static function definitions():Array<Dynamic> {
 		return [
 			tool("list_apps", "List running Lime apps that have lime-agent enabled, with their window size and whether input is allowed, plus recent crashes.", {}, true),
-			tool("screenshot", "Capture the app's window as a PNG. Coordinates for click and scroll are pixels in this image.", {app: APP}, true),
-			tool("ui_tree", "The app's UI as an outline: one control per line with its kind, name, text and bounds [x,y width x height] in screenshot pixels.",
-				{app: APP, maxNodes: {type: "integer", description: "At most this many controls (default 400)."}}, true),
+			tool("screenshot", "Capture the app's window as a PNG. Coordinates for click, drag and scroll are pixels in this image.", {app: APP}, true),
+			tool("ui_tree", "The app's UI as an outline, one object per line: its kind, #name, (label), \"text\" and bounds [x,y width x height] in screenshot pixels, "
+				+ "then whether a click there reaches it (no-pointer, covered, or a point to click at when its centre is covered). Later siblings draw on top.",
+				{
+					app: APP,
+					maxNodes: {type: "integer", description: "At most this many objects (default 400)."},
+					maxDepth: {type: "integer", description: "At most this many levels deep (default 30)."}
+				}, true),
 			tool("click", "Click at a point in screenshot pixels, through the app's own mouse events.", {
 				app: APP,
 				x: {type: "number"},
@@ -26,6 +31,17 @@ class Tools {
 				button: {type: "string", "enum": ["left", "right", "middle"]},
 				double: {type: "boolean", description: "Double-click."}
 			}, false, ["x", "y"]),
+			tool("drag", "Press at one point, move to another and release there, through the app's own mouse events: drag and drop, sliders, selections. "
+				+ "Coordinates are screenshot pixels. Moves go one per frame, so the app sees the motion.", {
+				app: APP,
+				fromX: {type: "number"},
+				fromY: {type: "number"},
+				toX: {type: "number"},
+				toY: {type: "number"},
+				button: {type: "string", "enum": ["left", "right", "middle"]},
+				steps: {type: "integer", description: "Moves from the start to the end (default 10, at most 100)."},
+				holdMs: {type: "integer", description: "Hold the button at the start this long before moving, for apps that wait for a long press (default 0, at most 10000)."}
+			}, false, ["fromX", "fromY", "toX", "toY"]),
 			tool("type", "Type text into the focused control, as committed text input.", {app: APP, text: {type: "string"}}, false, ["text"]),
 			tool("key", "Press a key, with optional modifiers. Keys: letters, digits, punctuation, enter, tab, escape, backspace, delete, space, arrows (left, right, up, down), home, end, pageup, pagedown, insert, f1-f12.", {
 				app: APP,
@@ -78,6 +94,7 @@ class Tools {
 					var events:Array<Dynamic> = [move].concat(press);
 					if (args.double == true) events = events.concat(press);
 					input(args, events, '${args.double == true ? "Double-clicked" : "Clicked"} $button at $x,$y.');
+				case "drag": drag(args);
 				case "type":
 					if (!Std.isOfType(args.text, String)) throw "text is required.";
 					input(args, [{type: "text", text: args.text}], 'Typed ${(args.text : String).length} characters.');
@@ -212,12 +229,16 @@ class Tools {
 
 	static function uiTree(args:Dynamic):ToolResult {
 		var app = resolve(args.app);
-		var tree = app.client.call("tree", args.maxNodes == null ? {} : {maxNodes: args.maxNodes});
+		var request:Dynamic = {};
+		if (args.maxNodes != null) request.maxNodes = args.maxNodes;
+		if (args.maxDepth != null) request.maxDepth = args.maxDepth;
+		var tree = app.client.call("tree", request);
 		var lines = ['UI of ${describe(app.client.entry)} from the ${tree.adapter} adapter, ${tree.width}x${tree.height} pixels (same grid as screenshot):'];
 		function walk(nodes:Array<Dynamic>, depth:Int) {
 			for (node in nodes) {
 				var line = StringTools.lpad("", " ", depth * 2) + node.kind;
 				if (node.name != null) line += " #" + node.name;
+				if (node.label != null) line += " (" + node.label + ")";
 				if (node.text != null) {
 					var text:String = StringTools.replace(StringTools.replace(node.text, "\r", ""), "\n", "\\n");
 					line += ' "' + (text.length > 300 ? text.substr(0, 300) + "..." : text) + '"';
@@ -225,14 +246,37 @@ class Tools {
 				line += ' [${node.x},${node.y} ${node.width}x${node.height}]';
 				if (node.enabled == false) line += " disabled";
 				if (node.focused == true) line += " focused";
+				if (node.hidden == true) line += " hidden";
+				if (node.pointer == false) line += " no-pointer";
+				if (node.covered == true) line += " covered";
+				if (node.at != null) line += ' click at ${node.at.x},${node.at.y}';
 				lines.push(line);
 				if (node.children != null) walk(node.children, depth + 1);
+				if (node.more != null) lines.push(StringTools.lpad("", " ", depth * 2 + 2) + '(${node.more} more)');
 			}
 		}
 		walk(tree.nodes, 0);
 		if ((tree.nodes : Array<Dynamic>).length == 0) lines.push("(no controls)");
-		if (tree.truncated) lines.push("(truncated; pass a larger maxNodes for more)");
+		if (tree.truncated) lines.push("(some objects left out; pass a larger maxNodes or maxDepth for more)");
 		return {text: lines.join("\n")};
+	}
+
+	/** Down at the start, `steps` moves along the line, up at the end: one event a frame, so the app sees each. */
+	static function drag(args:Dynamic):ToolResult {
+		var fromX = number(args.fromX, "fromX"), fromY = number(args.fromY, "fromY"), toX = number(args.toX, "toX"), toY = number(args.toY, "toY");
+		var button = args.button == null ? "left" : args.button;
+		var steps = whole(args.steps, "steps", 10, 1, 100), hold = whole(args.holdMs, "holdMs", 0, 0, 10000);
+		var press:Array<Dynamic> = [{type: "mouse_move", x: fromX, y: fromY}, {type: "mouse_down", x: fromX, y: fromY, button: button}];
+		var moves:Array<Dynamic> = [for (i in 1...steps + 1) {type: "mouse_move", x: fromX + (toX - fromX) * i / steps, y: fromY + (toY - fromY) * i / steps}];
+		moves.push({type: "mouse_up", x: toX, y: toY, button: button});
+		var done = 'Dragged $button from $fromX,$fromY to $toX,$toY in $steps moves.';
+		if (hold == 0) return input(args, press.concat(moves), done);
+		// Held across two batches: the app sees the press, then nothing for holdMs, then the moves.
+		var app = resolve(args.app);
+		app.client.call("input", {events: press}, 15);
+		Sys.sleep(hold / 1000);
+		app.client.call("input", {events: moves}, 15);
+		return {text: done};
 	}
 
 	static function input(args:Dynamic, events:Array<Dynamic>, done:String):ToolResult {
@@ -292,6 +336,12 @@ class Tools {
 			case "unauthorized": "The app refused the registry token; it may have restarted. Call list_apps.";
 			default: error.message;
 		}
+	}
+
+	static function whole(value:Dynamic, name:String, fallback:Int, min:Int, max:Int):Int {
+		if (value == null) return fallback;
+		if (!Std.isOfType(value, Int) || value < min || value > max) throw '$name must be a whole number from $min to $max.';
+		return value;
 	}
 
 	static function number(value:Dynamic, name:String):Float {
